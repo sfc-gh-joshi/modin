@@ -314,14 +314,17 @@ def wrap_method_in_backend_dispatcher(
         # Assume that `self` is the first argument.
         self = args[0]
         remaining_args = args[1:]
-        if (
-            hasattr(self, "_query_compiler")
-            and self.get_backend() in extensions
-            and name in extensions[self.get_backend()]
-        ):
+        backend = None
+        if hasattr(self, "_query_compiler"):
+            backend = self.get_backend()
+        else:
+            # For methods like __init__, which do not have a _query_compiler attached, we use
+            # the global backend variable to ensure dispatch is done correctly.
+            backend = Backend.get()
+        if backend in extensions and name in extensions[backend]:
             # If `self` is using a query compiler whose backend has an
             # extension for this method, use that extension.
-            return extensions[self.get_backend()][name](self, *remaining_args, **kwargs)
+            return extensions[backend][name](self, *remaining_args, **kwargs)
         else:
             # Otherwise, use the default implementation.
             if name not in extensions[None]:
