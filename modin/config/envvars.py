@@ -588,6 +588,16 @@ Backend.register_backend("Unidist", Execution("Pandas", "Unidist"))
 Backend.register_backend("Pandas", Execution("Native", "Native"))
 
 
+class AutoSwitchBackend(EnvironmentVariable, type=bool):
+    """
+    When this flag is set, Modin will attempt to automatically choose an appropriate backend for
+    different operations based on the input data.
+    """
+
+    varname = "MODIN_AUTO_SWITCH_BACKENDS"
+    default = True
+
+
 class IsExperimental(EnvironmentVariable, type=bool):
     """Whether to Turn on experimental features."""
 
