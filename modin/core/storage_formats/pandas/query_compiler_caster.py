@@ -62,6 +62,7 @@ _NON_EXTENDABLE_ATTRIBUTES = {
     "_query_compiler",
     "_get_query_compiler",
     "_copy_into",
+    "__dict__",
 }
 
 
