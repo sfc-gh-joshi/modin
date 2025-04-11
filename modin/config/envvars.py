@@ -597,6 +597,16 @@ class AutoSwitchBackend(EnvironmentVariable, type=bool):
     varname = "MODIN_AUTO_SWITCH_BACKENDS"
     default = True
 
+    @classmethod
+    def enable(cls) -> None:
+        """Enable ``ProgressBar`` feature."""
+        cls.put(True)
+
+    @classmethod
+    def disable(cls) -> None:
+        """Disable ``ProgressBar`` feature."""
+        cls.put(False)
+
 
 class IsExperimental(EnvironmentVariable, type=bool):
     """Whether to Turn on experimental features."""
