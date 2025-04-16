@@ -31,69 +31,93 @@ if (
 # to not pollute namespace
 del version
 
+# Track a dict of classes that are re-exported from pandas that may need to dynamically change when
+# overridden by the extensions system, such as pd.Index.
+# To avoid polluting the namespace, this list is not persisted, and should be passed to the getattr
+# proxy function when this module is initialized.
+_reexport_classes = {}
+
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    from pandas import (
-        eval,
-        factorize,
-        test,
-        date_range,
-        period_range,
-        Index,
-        MultiIndex,
-        CategoricalIndex,
-        bdate_range,
-        DatetimeIndex,
-        Timedelta,
-        Timestamp,
-        set_eng_float_format,
-        options,
-        describe_option,
-        set_option,
-        get_option,
-        reset_option,
-        option_context,
-        NaT,
-        PeriodIndex,
-        Categorical,
-        Interval,
-        UInt8Dtype,
-        UInt16Dtype,
-        UInt32Dtype,
-        UInt64Dtype,
-        SparseDtype,
-        Int8Dtype,
-        Int16Dtype,
-        Int32Dtype,
-        Int64Dtype,
-        StringDtype,
-        BooleanDtype,
-        CategoricalDtype,
-        DatetimeTZDtype,
-        IntervalDtype,
-        PeriodDtype,
-        RangeIndex,
-        TimedeltaIndex,
-        IntervalIndex,
-        IndexSlice,
-        Grouper,
-        array,
-        Period,
-        DateOffset,
-        timedelta_range,
-        infer_freq,
-        interval_range,
-        ExcelWriter,
-        NamedAgg,
-        NA,
-        api,
-        ArrowDtype,
-        Flags,
-        Float32Dtype,
-        Float64Dtype,
-        from_dummies,
-        testing,
+    import inspect
+    from modin.core.storage_formats.pandas.query_compiler_caster import (
+        wrap_free_function_in_argument_caster,
     )
+
+    # To allow the extensions system to override these methods, we must wrap all objects re-exported
+    # from pandas in a backend dispatcher.
+    _reexport_list = (
+        "eval",
+        "factorize",
+        "test",
+        "date_range",
+        "period_range",
+        "Index",
+        "MultiIndex",
+        "CategoricalIndex",
+        "bdate_range",
+        "DatetimeIndex",
+        "Timedelta",
+        "Timestamp",
+        "set_eng_float_format",
+        "options",
+        "describe_option",
+        "set_option",
+        "get_option",
+        "reset_option",
+        "option_context",
+        "NaT",
+        "PeriodIndex",
+        "Categorical",
+        "Interval",
+        "UInt8Dtype",
+        "UInt16Dtype",
+        "UInt32Dtype",
+        "UInt64Dtype",
+        "SparseDtype",
+        "Int8Dtype",
+        "Int16Dtype",
+        "Int32Dtype",
+        "Int64Dtype",
+        "StringDtype",
+        "BooleanDtype",
+        "CategoricalDtype",
+        "DatetimeTZDtype",
+        "IntervalDtype",
+        "PeriodDtype",
+        "RangeIndex",
+        "TimedeltaIndex",
+        "IntervalIndex",
+        "IndexSlice",
+        "Grouper",
+        "array",
+        "Period",
+        "DateOffset",
+        "timedelta_range",
+        "infer_freq",
+        "interval_range",
+        "ExcelWriter",
+        "NamedAgg",
+        "NA",
+        "api",
+        "ArrowDtype",
+        "Flags",
+        "Float32Dtype",
+        "Float64Dtype",
+        "from_dummies",
+        "testing",
+    )
+    for name in _reexport_list:
+        item = getattr(pandas, name)
+        if inspect.isclass(item):
+            _reexport_classes[name] = item
+            # Do NOT re-export classes to the global namespace. These should fall through to
+            # __getattr__ so the extensions system can pick the correct object to use.
+            continue
+        if inspect.isfunction(item):
+            item = wrap_free_function_in_argument_caster(name)(item)
+        globals()[name] = item
+    del inspect, item, _reexport_list, name, wrap_free_function_in_argument_caster
 
 import os
 
@@ -136,7 +160,7 @@ def _initialize_engine(engine_string: str):
 
 
 from modin.pandas import arrays, errors
-from modin.pandas.api.extensions.extensions import __getattr___impl
+from modin.pandas.api.extensions.extensions import make_module___getattr___impl
 from modin.utils import show_versions
 
 from .. import __version__
@@ -194,7 +218,8 @@ from .io import (
 from .plotting import Plotting as plotting
 from .series import Series
 
-__getattr__ = __getattr___impl
+
+__getattr__ = make_module___getattr___impl(_reexport_classes)
 
 
 __all__ = [  # noqa: F405
@@ -312,4 +337,4 @@ __all__ = [  # noqa: F405
 ]
 
 # Remove these attributes from this module's namespace.
-del pandas, Parameter, __getattr___impl
+del pandas, Parameter, make_module___getattr___impl, _reexport_classes

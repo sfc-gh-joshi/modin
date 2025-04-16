@@ -12,8 +12,9 @@
 # governing permissions and limitations under the License.
 
 from collections import defaultdict
+import inspect
 from types import MethodType, ModuleType
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, Dict
 
 import modin.pandas as pd
 from modin.config import Backend
@@ -73,9 +74,15 @@ def _set_attribute_on_obj(
         extensions[None if backend is None else Backend.normalize(backend)][
             name
         ] = new_attr
-        if callable(new_attr) and name not in dir(obj):
+        if (
+            callable(new_attr)
+            and name not in dir(obj)
+            and not inspect.isclass(new_attr)
+        ):
             # For callable extensions, we add a method to `obj`'s namespace that
             # dispatches to the correct implementation.
+            # If the extension is a class like pd.Index, do not add a wrapper and let
+            # the getattr dispatcher choose the correct item.
             setattr(
                 obj,
                 name,
@@ -97,7 +104,7 @@ def _set_attribute_on_obj(
 
 def register_dataframe_accessor(name: str, *, backend: Optional[str] = None):
     """
-    Registers a dataframe attribute with the name provided.
+    Register a dataframe attribute with the name provided.
 
     This is a decorator that assigns a new attribute to DataFrame. It can be used
     with the following syntax:
@@ -135,7 +142,7 @@ def register_dataframe_accessor(name: str, *, backend: Optional[str] = None):
 
 def register_series_accessor(name: str, *, backend: Optional[str] = None):
     """
-    Registers a series attribute with the name provided.
+    Register a series attribute with the name provided.
 
     This is a decorator that assigns a new attribute to Series. It can be used
     with the following syntax:
@@ -216,7 +223,7 @@ def register_base_accessor(name: str, *, backend: Optional[str] = None):
 
 def register_pd_accessor(name: str, *, backend: Optional[str] = None):
     """
-    Registers a pd namespace attribute with the name provided.
+    Register a pd namespace attribute with the name provided.
 
     This is a decorator that assigns a new attribute to modin.pandas. It can be used
     with the following syntax:
@@ -255,31 +262,45 @@ def register_pd_accessor(name: str, *, backend: Optional[str] = None):
     )
 
 
-def __getattr___impl(name: str):
+def make_module___getattr___impl(reexport_classes: Dict[str, type]):
     """
-    Override __getatttr__ on the modin.pandas module to enable extensions.
+    Enable extensions on module-level __getattr__ on modin.pandas classes.
 
-    Note that python only falls back to this function if the attribute is not
-    found in this module's namespace.
+    To allow dynamic dispatch to different backends, we wrap re-exported module-level functions
+    in a dispatcher that chooses the appropriate backend from the extensions system.
 
-    Parameters
-    ----------
-    name : str
-        The name of the attribute being retrieved.
-
-    Returns
-    -------
-    Attribute
-        Returns the extension attribute, if it exists, otherwise returns the attribute
-        imported in this file.
+    This function does something similar for classes like pd.Index, instead shifting dispatch to
+    __getattr___impl to continue allowing isinstance checks against these classes.
     """
 
-    from modin.config import Backend
+    def __getattr___impl(name: str):
+        """
+        Override __getattr__ on the modin.pandas module to enable extensions.
 
-    backend = Backend.get()
-    if name in _GENERAL_EXTENSIONS[backend]:
-        return _GENERAL_EXTENSIONS[backend][name]
-    elif name in _GENERAL_EXTENSIONS[None]:
-        return _GENERAL_EXTENSIONS[None][name]
-    else:
-        raise AttributeError(f"module 'modin.pandas' has no attribute '{name}'")
+        Note that python only falls back to this function if the attribute is not
+        found in this module's namespace.
+
+        Parameters
+        ----------
+        name : str
+            The name of the attribute being retrieved.
+
+        Returns
+        -------
+        Attribute
+            Returns the extension attribute, if it exists, otherwise returns the attribute
+            imported in this file.
+        """
+        from modin.config import Backend
+
+        backend = Backend.get()
+        if name in _GENERAL_EXTENSIONS[backend]:
+            return _GENERAL_EXTENSIONS[backend][name]
+        elif name in _GENERAL_EXTENSIONS[None]:
+            return _GENERAL_EXTENSIONS[None][name]
+        elif name in reexport_classes:
+            return reexport_classes[name]
+        else:
+            raise AttributeError(f"module 'modin.pandas' has no attribute '{name}'")
+
+    return __getattr___impl
