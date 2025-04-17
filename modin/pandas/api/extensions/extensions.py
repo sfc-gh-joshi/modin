@@ -27,12 +27,18 @@ from modin.core.storage_formats.pandas.query_compiler_caster import (
 
 _attrs_to_delete_on_test = defaultdict(list)
 
+# Track a dict of module-level classes that are re-exported from pandas that may need to dynamically
+# change when overridden by the extensions system, such as pd.Index.
+# See register_pd_accessor for details.
+_reexport_classes: Dict[str, Any] = {}
+
 
 def _set_attribute_on_obj(
     name: str,
     extensions: EXTENSION_DICT_TYPE,
     backend: Optional[str],
     obj: Union[type, ModuleType],
+    set_reexport: bool = False,
 ):
     """
     Create a new or override existing attribute on obj.
@@ -48,6 +54,8 @@ def _set_attribute_on_obj(
         will become the default for all backends.
     obj : DataFrame, Series, or modin.pandas
         The object we are assigning the new attribute to.
+    set_reexport : bool, default False
+        If True, register the original property in `_reexport_classes`.
 
     Returns
     -------
@@ -71,6 +79,21 @@ def _set_attribute_on_obj(
         new_attr
             Unmodified new_attr is return from the decorator.
         """
+        # Module-level functions are resolved by `wrap_free_function_in_argument_caster`, which dynamically
+        # identifies the appropriate backend to use. We cannot apply this wrapper to classes in order
+        # to preserve the vailidity of `isinstance` checks, and instead must force __getattr__ to directly
+        # return the correct class.
+        # Because the module-level __getattr__ function is not called if the object is found in the namespace,
+        # any overrides from the extensions system must `delattr` the attribute to force any future lookups
+        # to hit this code path.
+        # We cannot do this by omitting those exports at module initialization time because the
+        # __getattr__ codepath performs a call to Backend.get() that assumes the presence of an engine;
+        # in an extensions system that may reference types like pd.Timestamp/pd.Index before registering
+        # itself as an engine, this will cause errors.
+        if set_reexport:
+            original_attr = getattr(pd, name)
+            _reexport_classes[name] = original_attr
+            delattr(pd, name)
         extensions[None if backend is None else Backend.normalize(backend)][
             name
         ] = new_attr
@@ -257,50 +280,42 @@ def register_pd_accessor(name: str, *, backend: Optional[str] = None):
     decorator
         Returns the decorator function.
     """
+    set_reexport = name not in _GENERAL_EXTENSIONS[backend] and name in dir(pd)
     return _set_attribute_on_obj(
-        name=name, extensions=_GENERAL_EXTENSIONS, backend=backend, obj=pd
+        name=name,
+        extensions=_GENERAL_EXTENSIONS,
+        backend=backend,
+        obj=pd,
+        set_reexport=set_reexport,
     )
 
 
-def make_module___getattr___impl(reexport_classes: Dict[str, type]):
+def __getattr___impl(name: str):
     """
-    Enable extensions on module-level __getattr__ on modin.pandas classes.
+    Override __getattr__ on the modin.pandas module to enable extensions.
 
-    To allow dynamic dispatch to different backends, we wrap re-exported module-level functions
-    in a dispatcher that chooses the appropriate backend from the extensions system.
+    Note that python only falls back to this function if the attribute is not
+    found in this module's namespace.
 
-    This function does something similar for classes like pd.Index, instead shifting dispatch to
-    __getattr___impl to continue allowing isinstance checks against these classes.
+    Parameters
+    ----------
+    name : str
+        The name of the attribute being retrieved.
+
+    Returns
+    -------
+    Attribute
+        Returns the extension attribute, if it exists, otherwise returns the attribute
+        imported in this file.
     """
+    from modin.config import Backend
 
-    def __getattr___impl(name: str):
-        """
-        Override __getattr__ on the modin.pandas module to enable extensions.
-
-        Note that python only falls back to this function if the attribute is not
-        found in this module's namespace.
-
-        Parameters
-        ----------
-        name : str
-            The name of the attribute being retrieved.
-
-        Returns
-        -------
-        Attribute
-            Returns the extension attribute, if it exists, otherwise returns the attribute
-            imported in this file.
-        """
-        from modin.config import Backend
-
-        backend = Backend.get()
-        if name in _GENERAL_EXTENSIONS[backend]:
-            return _GENERAL_EXTENSIONS[backend][name]
-        elif name in _GENERAL_EXTENSIONS[None]:
-            return _GENERAL_EXTENSIONS[None][name]
-        elif name in reexport_classes:
-            return reexport_classes[name]
-        else:
-            raise AttributeError(f"module 'modin.pandas' has no attribute '{name}'")
-
-    return __getattr___impl
+    backend = Backend.get()
+    if name in _GENERAL_EXTENSIONS[backend]:
+        return _GENERAL_EXTENSIONS[backend][name]
+    elif name in _GENERAL_EXTENSIONS[None]:
+        return _GENERAL_EXTENSIONS[None][name]
+    elif name in _reexport_classes:
+        return _reexport_classes[name]
+    else:
+        raise AttributeError(f"module 'modin.pandas' has no attribute '{name}'")

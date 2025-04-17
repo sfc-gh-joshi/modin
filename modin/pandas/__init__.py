@@ -31,11 +31,6 @@ if (
 # to not pollute namespace
 del version
 
-# Track a dict of classes that are re-exported from pandas that may need to dynamically change when
-# overridden by the extensions system, such as pd.Index.
-# To avoid polluting the namespace, this list is not persisted, and should be passed to the getattr
-# proxy function when this module is initialized.
-_reexport_classes = {}
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -109,12 +104,8 @@ with warnings.catch_warnings():
     )
     for name in _reexport_list:
         item = getattr(pandas, name)
-        if inspect.isclass(item):
-            _reexport_classes[name] = item
-            # Do NOT re-export classes to the global namespace. These should fall through to
-            # __getattr__ so the extensions system can pick the correct object to use.
-            continue
         if inspect.isfunction(item):
+            # Note that this is applied to only functions, not classes.
             item = wrap_free_function_in_argument_caster(name)(item)
         globals()[name] = item
     del inspect, item, _reexport_list, name, wrap_free_function_in_argument_caster
@@ -160,7 +151,7 @@ def _initialize_engine(engine_string: str):
 
 
 from modin.pandas import arrays, errors
-from modin.pandas.api.extensions.extensions import make_module___getattr___impl
+from modin.pandas.api.extensions.extensions import __getattr___impl
 from modin.utils import show_versions
 
 from .. import __version__
@@ -219,7 +210,7 @@ from .plotting import Plotting as plotting
 from .series import Series
 
 
-__getattr__ = make_module___getattr___impl(_reexport_classes)
+__getattr__ = __getattr___impl
 
 
 __all__ = [  # noqa: F405
@@ -337,4 +328,4 @@ __all__ = [  # noqa: F405
 ]
 
 # Remove these attributes from this module's namespace.
-del pandas, Parameter, make_module___getattr___impl, _reexport_classes
+del pandas, Parameter, __getattr___impl
