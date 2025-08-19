@@ -215,10 +215,18 @@ class ExcelDispatcher(TextFileDispatcher):
             dtypes_ids = []
 
             kwargs["num_splits"] = num_splits
+            nrows = kwargs["nrows"]
 
             while f.tell() < total_bytes:
                 args = kwargs
+                args["nrows"] = nrows
                 args["skiprows"] = row_count + args["skiprows"]
+                # If nrows was set, read only the necessary remaining count.
+                if nrows is not None:
+                    print(nrows)
+                    args["nrows"] = nrows - args["skiprows"]
+                    if args["nrows"] <= 0:
+                        break
                 args["start"] = f.tell()
                 chunk = f.read(chunk_size)
                 # This edge case can happen when we have reached the end of the data
